@@ -10,6 +10,7 @@ from app.core.security import get_password_hash, create_access_token
 from app.models.user import User, StaffProfile
 from app.models.customer import CustomerBusiness, CustomerMembership
 from app.models.catalog import Product, Plan, TaxRate, DiscountRule
+from app.models.automation import ReminderRule
 
 TEST_DATABASE_URL = "sqlite:///:memory:"
 
@@ -126,6 +127,50 @@ def db_session():
             is_primary=True
         )
         session.add(mem2)
+
+        # Seed reminder rules
+        session.add_all([
+            ReminderRule(
+                name="Upcoming Invoice Reminder (3 Days Before Due)",
+                trigger_type="before_due",
+                days_offset=-3,
+                channel="email",
+                subject_template="Reminder: Brightloop Invoice {invoice_number} is due in 3 days",
+                body_template="Dear Customer, invoice {invoice_number} for ₹{final_total} is due on {due_date}. Remaining balance: ₹{remaining_balance}.",
+                escalation_level="standard",
+                is_active=True
+            ),
+            ReminderRule(
+                name="Due Date Notice (On Due Date)",
+                trigger_type="on_due",
+                days_offset=0,
+                channel="email",
+                subject_template="Notice: Brightloop Invoice {invoice_number} is due today",
+                body_template="Dear Customer, invoice {invoice_number} is due today. Outstanding balance: ₹{remaining_balance}.",
+                escalation_level="standard",
+                is_active=True
+            ),
+            ReminderRule(
+                name="First Overdue Notice (7 Days Overdue)",
+                trigger_type="after_due_overdue",
+                days_offset=7,
+                channel="email",
+                subject_template="Overdue Notice: Brightloop Invoice {invoice_number} is 7 days past due",
+                body_template="Dear Customer, invoice {invoice_number} is 7 days overdue. Balance: ₹{remaining_balance}.",
+                escalation_level="urgent",
+                is_active=True
+            ),
+            ReminderRule(
+                name="Final Notice (14 Days Overdue)",
+                trigger_type="after_due_overdue",
+                days_offset=14,
+                channel="email",
+                subject_template="Final Notice: Urgent payment required for Invoice {invoice_number}",
+                body_template="Dear Customer, urgent payment required for invoice {invoice_number}.",
+                escalation_level="final_notice",
+                is_active=True
+            )
+        ])
 
         session.commit()
         yield session

@@ -2,14 +2,15 @@ import React, { useState, useEffect } from 'react';
 import {
   User, Product, Plan, TaxRate, DiscountRule, CustomerBusiness, AuditLog,
   SubscriptionRequest, Quotation, QuotationVersion, VersionDiff, Subscription,
-  Invoice, Payment
+  Invoice, Payment, BankFeedItem, BankFeedItemInput, ReminderRule, NotificationLog, RunRemindersResult
 } from '../../types';
 import { api } from '../../services/api';
 import {
   Layers, Package, Users, Shield, FileText, Plus,
   CheckCircle2, AlertCircle, RefreshCw, Eye, Building2,
   FileCheck2, GitCompare, MessageSquare, Clock, Send, Ban,
-  Receipt, CreditCard, Download, Play, DollarSign
+  Receipt, CreditCard, Download, Play, DollarSign,
+  GitMerge, Bell, Sliders, Search, AlertTriangle
 } from 'lucide-react';
 
 interface InternalPortalProps {
@@ -18,11 +19,51 @@ interface InternalPortalProps {
 
 export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
   const [activeTab, setActiveTab] = useState<
-    'requests' | 'quotations' | 'approval_queue' | 'subscriptions' | 'invoices' | 'payments' | 'catalog' | 'plans' | 'taxes_discounts' | 'staff' | 'customers' | 'audit'
+    'requests' | 'quotations' | 'approval_queue' | 'subscriptions' | 'invoices' | 'payments' | 'reconciliation' | 'reminders' | 'catalog' | 'plans' | 'taxes_discounts' | 'staff' | 'customers' | 'audit'
   >('requests');
 
   // Data states
   const [requestsList, setRequestsList] = useState<SubscriptionRequest[]>([]);
+  const [feedItems, setFeedItems] = useState<BankFeedItem[]>([]);
+  const [reminderRules, setReminderRules] = useState<ReminderRule[]>([]);
+  const [reminderHistory, setReminderHistory] = useState<NotificationLog[]>([]);
+
+  // Phase 4 Automation & Reconciliation states
+  const [feedFilterStatus, setFeedFilterStatus] = useState<string>('all');
+  const [showIngestModal, setShowIngestModal] = useState<boolean>(false);
+  const [ingestForm, setIngestForm] = useState({
+    transaction_id: '',
+    amount: '',
+    currency: 'INR',
+    raw_narration: '',
+    sender_name: '',
+    bank_account_number: 'HDFC-00998811',
+  });
+  const [confirmMatchModal, setConfirmMatchModal] = useState<{
+    item: BankFeedItem;
+    invoice_id: number;
+    amount: string;
+    notes: string;
+  } | null>(null);
+  const [disputeModal, setDisputeModal] = useState<{
+    item: BankFeedItem;
+    reason: string;
+  } | null>(null);
+
+  const [showRuleModal, setShowRuleModal] = useState<boolean>(false);
+  const [ruleForm, setRuleForm] = useState({
+    name: '',
+    trigger_type: 'before_due' as 'before_due' | 'on_due' | 'after_due_overdue' | 'upcoming_renewal',
+    days_offset: -3,
+    channel: 'email' as 'email' | 'in_app',
+    subject_template: 'Reminder: Invoice {invoice_number} is due soon',
+    body_template: 'Dear Customer, this is a reminder that invoice {invoice_number} is due on {due_date}. Remaining balance: {amount_due}.',
+    escalation_level: 'standard' as 'standard' | 'urgent' | 'final_notice',
+  });
+
+  const [showSweepModal, setShowSweepModal] = useState<boolean>(false);
+  const [sweepTargetDate, setSweepTargetDate] = useState<string>('');
+  const [sweepResult, setSweepResult] = useState<RunRemindersResult | null>(null);
   const [quotationsList, setQuotationsList] = useState<Quotation[]>([]);
   const [subscriptionsList, setSubscriptionsList] = useState<Subscription[]>([]);
   const [invoicesList, setInvoicesList] = useState<Invoice[]>([]);
@@ -128,7 +169,7 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const [reqs, quotes, subs, prods, plns, txs, discs, invs, pays, bizs] = await Promise.all([
+      const [reqs, quotes, subs, prods, plns, txs, discs, invs, pays, bizs, feeds, rules, notifs] = await Promise.all([
         api.listStaffRequests(),
         api.listStaffQuotations(),
         api.listStaffSubscriptions(),
@@ -139,6 +180,9 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
         api.listFinanceInvoices(),
         api.listFinancePayments(),
         api.listAdminBusinesses(),
+        api.listBankFeedItems(),
+        api.listReminderRules(),
+        api.listReminderHistory(),
       ]);
       setRequestsList(reqs);
       setQuotationsList(quotes);
@@ -150,6 +194,9 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
       setInvoicesList(invs);
       setPaymentsList(pays);
       setCustomerBusinesses(bizs);
+      setFeedItems(feeds);
+      setReminderRules(rules);
+      setReminderHistory(notifs);
 
       if (prods.length > 0 && plns.length > 0) {
         setQuoteForm(prev => ({
@@ -474,6 +521,102 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
     }
   };
 
+  // --- Phase 4 Reconciliation & Reminders Handlers ---
+  const handleIngestBankFeed = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const txId = ingestForm.transaction_id || `TX-${Date.now().toString().slice(-6)}`;
+      await api.ingestBankFeed([{
+        transaction_id: txId,
+        amount: ingestForm.amount,
+        currency: ingestForm.currency,
+        raw_narration: ingestForm.raw_narration,
+        sender_name: ingestForm.sender_name || undefined,
+        bank_account_number: ingestForm.bank_account_number || undefined,
+      }]);
+      setFeedback({ type: 'success', message: `Bank feed item ${txId} ingested and evaluated.` });
+      setShowIngestModal(false);
+      setIngestForm({
+        transaction_id: '',
+        amount: '',
+        currency: 'INR',
+        raw_narration: '',
+        sender_name: '',
+        bank_account_number: 'HDFC-00998811',
+      });
+      loadAllData();
+      setActiveTab('reconciliation');
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message });
+    }
+  };
+
+  const handleConfirmMatch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!confirmMatchModal) return;
+    try {
+      await api.confirmFeedMatch(
+        confirmMatchModal.item.id,
+        confirmMatchModal.invoice_id,
+        confirmMatchModal.amount || undefined,
+        confirmMatchModal.notes || undefined
+      );
+      setFeedback({ type: 'success', message: `Transaction ${confirmMatchModal.item.transaction_id} reconciled successfully.` });
+      setConfirmMatchModal(null);
+      loadAllData();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message });
+    }
+  };
+
+  const handleDispute = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!disputeModal) return;
+    try {
+      await api.disputeFeedItem(disputeModal.item.id, disputeModal.reason);
+      setFeedback({ type: 'success', message: 'Transaction marked as disputed.' });
+      setDisputeModal(null);
+      loadAllData();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message });
+    }
+  };
+
+  const handleCreateReminderRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await api.createReminderRule(ruleForm);
+      setFeedback({ type: 'success', message: 'Reminder governance rule configured.' });
+      setShowRuleModal(false);
+      setRuleForm({
+        name: '',
+        trigger_type: 'before_due',
+        days_offset: -3,
+        channel: 'email',
+        subject_template: 'Reminder: Invoice {invoice_number} is due soon',
+        body_template: 'Dear Customer, this is a reminder that invoice {invoice_number} is due on {due_date}. Remaining balance: {amount_due}.',
+        escalation_level: 'standard',
+      });
+      loadAllData();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message });
+    }
+  };
+
+  const handleRunSweep = async () => {
+    try {
+      const res = await api.runRemindersSweep(sweepTargetDate || undefined);
+      setSweepResult(res);
+      setFeedback({
+        type: 'success',
+        message: `Reminder sweep complete: ${res.reminders_sent} reminder(s) sent, ${res.skipped_count} skipped.`
+      });
+      loadAllData();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message });
+    }
+  };
+
   const pendingApprovalQuotes = quotationsList.filter(q => q.status === 'submitted_for_approval');
 
   return (
@@ -567,6 +710,29 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
             }`}
           >
             Payments ({paymentsList.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('reconciliation')}
+            className={`pb-3 text-xs font-medium border-b-2 whitespace-nowrap transition-colors flex items-center space-x-1.5 ${
+              activeTab === 'reconciliation' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <span>Reconciliation Queue</span>
+            {feedItems.filter(f => f.status === 'suggested_match' || f.status === 'unmatched').length > 0 && (
+              <span className="bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+                {feedItems.filter(f => f.status === 'suggested_match' || f.status === 'unmatched').length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('reminders')}
+            className={`pb-3 text-xs font-medium border-b-2 whitespace-nowrap transition-colors flex items-center space-x-1.5 ${
+              activeTab === 'reminders' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <span>Reminders & Automation</span>
           </button>
 
           <button
@@ -1331,6 +1497,384 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Finance Reconciliation Queue */}
+      {activeTab === 'reconciliation' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Finance Reconciliation Queue</h2>
+              <p className="text-xs text-slate-500">Automated bank statement parsing, confidence-scored matching against open invoices, and dispute resolution.</p>
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => setShowIngestModal(true)}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 flex items-center space-x-1.5"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Ingest Bank Feed Item</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Metric Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Total Feed Items</span>
+              <span className="text-xl font-bold text-slate-900">{feedItems.length}</span>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Suggested Matches</span>
+              <span className="text-xl font-bold text-amber-600">
+                {feedItems.filter(f => f.status === 'suggested_match').length}
+              </span>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Reconciled</span>
+              <span className="text-xl font-bold text-emerald-600">
+                {feedItems.filter(f => f.status === 'reconciled').length}
+              </span>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Disputed / Unmatched</span>
+              <span className="text-xl font-bold text-red-600">
+                {feedItems.filter(f => f.status === 'disputed' || f.status === 'unmatched').length}
+              </span>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div className="flex space-x-2 items-center text-xs">
+            <span className="text-slate-500 font-medium">Filter Status:</span>
+            {['all', 'suggested_match', 'unmatched', 'reconciled', 'disputed'].map(st => (
+              <button
+                key={st}
+                onClick={() => setFeedFilterStatus(st)}
+                className={`px-2.5 py-1 rounded text-xs font-medium border capitalize ${
+                  feedFilterStatus === st
+                    ? 'bg-blue-50 text-blue-700 border-blue-300'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                {st.replace(/_/g, ' ')}
+              </button>
+            ))}
+          </div>
+
+          {/* Feed Items Table */}
+          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
+                  <th className="px-4 py-2.5">TX ID / Account</th>
+                  <th className="px-4 py-2.5">Date</th>
+                  <th className="px-4 py-2.5">Narration & Sender</th>
+                  <th className="px-4 py-2.5">Amount</th>
+                  <th className="px-4 py-2.5">Candidate Match</th>
+                  <th className="px-4 py-2.5">Confidence</th>
+                  <th className="px-4 py-2.5">Status</th>
+                  <th className="px-4 py-2.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-800">
+                {feedItems.filter(f => feedFilterStatus === 'all' || f.status === feedFilterStatus).length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                      No bank feed items match the selected filter.
+                    </td>
+                  </tr>
+                ) : (
+                  feedItems
+                    .filter(f => feedFilterStatus === 'all' || f.status === feedFilterStatus)
+                    .map((item) => {
+                      const suggInv = invoicesList.find(i => i.id === item.suggested_invoice_id);
+                      const suggBiz = customerBusinesses.find(b => b.id === item.suggested_business_id);
+                      const confPercent = Math.round(parseFloat(item.confidence_score || '0') * 100);
+
+                      return (
+                        <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-3">
+                            <span className="font-mono font-bold text-slate-900 block">{item.transaction_id}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{item.bank_account_number || 'Direct Feed'}</span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-500 font-mono text-[11px]">
+                            {new Date(item.transaction_date).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3 max-w-xs">
+                            <p className="font-mono text-[11px] text-slate-900 truncate" title={item.raw_narration}>
+                              {item.raw_narration}
+                            </p>
+                            {item.sender_name && (
+                              <span className="text-[10px] text-slate-500 block">Sender: {item.sender_name}</span>
+                            )}
+                            {item.parsed_reference && (
+                              <span className="text-[10px] text-blue-600 font-mono block">Parsed Ref: {item.parsed_reference}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-bold text-slate-900">
+                            ₹{parseFloat(item.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="px-4 py-3">
+                            {suggInv ? (
+                              <div>
+                                <span className="font-mono font-bold text-blue-600 block">{suggInv.invoice_number}</span>
+                                <span className="text-[10px] text-slate-500">{suggBiz?.company_name || 'Customer'} (Bal: ₹{parseFloat(suggInv.remaining_balance).toLocaleString('en-IN')})</span>
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic">No direct match</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {confPercent > 0 ? (
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold ${
+                                confPercent >= 90 ? 'bg-emerald-100 text-emerald-800' :
+                                confPercent >= 70 ? 'bg-amber-100 text-amber-800' :
+                                'bg-slate-100 text-slate-700'
+                              }`}>
+                                {confPercent}%
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">0%</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-0.5 rounded text-[11px] font-medium border capitalize ${
+                              item.status === 'reconciled' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                              item.status === 'suggested_match' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                              item.status === 'disputed' ? 'bg-red-50 text-red-700 border-red-200' :
+                              'bg-slate-100 text-slate-700 border-slate-200'
+                            }`}>
+                              {item.status.replace(/_/g, ' ')}
+                            </span>
+                            {item.reconciliation_notes && (
+                              <p className="text-[10px] text-slate-500 mt-1 italic truncate max-w-xs" title={item.reconciliation_notes}>
+                                {item.reconciliation_notes}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {item.status !== 'reconciled' && item.status !== 'disputed' && (
+                              <div className="flex justify-end space-x-1.5">
+                                <button
+                                  onClick={() => setConfirmMatchModal({
+                                    item,
+                                    invoice_id: item.suggested_invoice_id || (invoicesList.find(i => i.status !== 'paid')?.id || 0),
+                                    amount: item.amount,
+                                    notes: `Verified against narration ${item.raw_narration}`
+                                  })}
+                                  className="px-2 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 font-medium text-[11px]"
+                                >
+                                  Confirm Match
+                                </button>
+                                <button
+                                  onClick={() => setDisputeModal({ item, reason: '' })}
+                                  className="px-2 py-1 border border-red-300 text-red-600 rounded hover:bg-red-50 font-medium text-[11px]"
+                                >
+                                  Dispute
+                                </button>
+                              </div>
+                            )}
+                            {item.status === 'reconciled' && (
+                              <span className="text-[11px] text-emerald-600 font-medium inline-flex items-center space-x-1">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Reconciled</span>
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Reminders & Automation */}
+      {activeTab === 'reminders' && (
+        <div className="space-y-6">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Automated Reminders & Governance</h2>
+              <p className="text-xs text-slate-500">Scheduled dunning workflows: 3 days prior, on due date, 7 days overdue, and 14 days overdue final notice.</p>
+            </div>
+            <div className="flex space-x-2">
+              <button
+                onClick={() => {
+                  setSweepResult(null);
+                  setShowSweepModal(true);
+                }}
+                className="px-3 py-1.5 bg-blue-600 text-white rounded text-xs font-medium hover:bg-blue-700 flex items-center space-x-1.5"
+              >
+                <Play className="w-3.5 h-3.5" />
+                <span>Run Reminder Sweep</span>
+              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setShowRuleModal(true)}
+                  className="px-3 py-1.5 border border-slate-300 bg-white text-slate-700 rounded text-xs font-medium hover:bg-slate-50 flex items-center space-x-1.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>New Reminder Rule</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Metric Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Configured Rules</span>
+              <span className="text-xl font-bold text-slate-900">{reminderRules.length}</span>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Reminders Dispatched (Lifetime)</span>
+              <span className="text-xl font-bold text-blue-600">{reminderHistory.length}</span>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Overdue Invoices Monitored</span>
+              <span className="text-xl font-bold text-amber-600">
+                {invoicesList.filter(i => i.status === 'overdue' || (i.status === 'confirmed' && new Date(i.due_date) < new Date())).length}
+              </span>
+            </div>
+          </div>
+
+          {/* Governance Rules Table */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold text-slate-800 uppercase tracking-wider">Configured Dunning & Notice Rules</h3>
+            <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
+                    <th className="px-4 py-2.5">Rule Name</th>
+                    <th className="px-4 py-2.5">Trigger Condition</th>
+                    <th className="px-4 py-2.5">Offset</th>
+                    <th className="px-4 py-2.5">Channel</th>
+                    <th className="px-4 py-2.5">Escalation</th>
+                    <th className="px-4 py-2.5">Subject Template</th>
+                    <th className="px-4 py-2.5">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {reminderRules.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                        No reminder rules found.
+                      </td>
+                    </tr>
+                  ) : (
+                    reminderRules.map((rule) => (
+                      <tr key={rule.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-semibold text-slate-900">{rule.name}</td>
+                        <td className="px-4 py-3 capitalize">{rule.trigger_type.replace(/_/g, ' ')}</td>
+                        <td className="px-4 py-3 font-mono font-bold">
+                          {rule.days_offset < 0 ? `${Math.abs(rule.days_offset)} days before` :
+                           rule.days_offset === 0 ? 'On Due Date' :
+                           `${rule.days_offset} days after`}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="uppercase text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
+                            {rule.channel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize border ${
+                            rule.escalation_level === 'final_notice' ? 'bg-red-50 text-red-700 border-red-200' :
+                            rule.escalation_level === 'urgent' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                            'bg-slate-100 text-slate-700 border-slate-200'
+                          }`}>
+                            {rule.escalation_level.replace(/_/g, ' ')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[11px] text-slate-600 max-w-xs truncate" title={rule.subject_template}>
+                          {rule.subject_template}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center text-emerald-600 font-medium space-x-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Active</span>
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Reminder Dispatch History */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-semibold text-slate-800 uppercase tracking-wider">Live Notification & Delivery History</h3>
+            <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-medium">
+                    <th className="px-4 py-2.5">Sent Timestamp</th>
+                    <th className="px-4 py-2.5">Customer Organization</th>
+                    <th className="px-4 py-2.5">Recipient</th>
+                    <th className="px-4 py-2.5">Invoice #</th>
+                    <th className="px-4 py-2.5">Channel</th>
+                    <th className="px-4 py-2.5">Subject & Preview</th>
+                    <th className="px-4 py-2.5">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-800">
+                  {reminderHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                        No reminder notifications dispatched yet. Execute a reminder sweep to evaluate open invoices.
+                      </td>
+                    </tr>
+                  ) : (
+                    reminderHistory.map((notif) => {
+                      const biz = customerBusinesses.find(b => b.id === notif.business_id);
+                      const inv = invoicesList.find(i => i.id === notif.invoice_id);
+
+                      return (
+                        <tr key={notif.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 text-slate-500 font-mono text-[11px]">
+                            {new Date(notif.sent_at).toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 font-medium text-slate-900">
+                            {biz ? biz.company_name : `Business #${notif.business_id}`}
+                          </td>
+                          <td className="px-4 py-3 font-mono text-[11px] text-slate-600">
+                            {notif.recipient_email}
+                          </td>
+                          <td className="px-4 py-3 font-mono font-bold text-blue-600">
+                            {inv ? inv.invoice_number : (notif.invoice_id ? `Inv #${notif.invoice_id}` : 'General')}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="uppercase text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
+                              {notif.channel}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 max-w-sm">
+                            <span className="font-semibold text-slate-900 block truncate" title={notif.subject}>
+                              {notif.subject}
+                            </span>
+                            <span className="text-[11px] text-slate-500 block truncate" title={notif.content}>
+                              {notif.content}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 capitalize">
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>{notif.status}</span>
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
@@ -2713,6 +3257,356 @@ export const InternalPortal: React.FC<InternalPortalProps> = ({ user }) => {
               <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
                 <button type="button" onClick={() => setShowStaffModal(false)} className="px-3 py-1.5 border border-slate-300 rounded text-slate-700">Cancel</button>
                 <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white rounded font-medium hover:bg-blue-700">Provision Staff</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Ingest Bank Feed Item */}
+      {showIngestModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 text-xs">
+            <div className="flex justify-between items-start border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Ingest Bank Statement Feed</h3>
+                <p className="text-xs text-slate-500">Simulate bank statement line ingestion with automated reference matching.</p>
+              </div>
+              <button onClick={() => setShowIngestModal(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            <form onSubmit={handleIngestBankFeed} className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Transaction ID (Reference) *</label>
+                <input
+                  type="text"
+                  required
+                  value={ingestForm.transaction_id}
+                  onChange={(e) => setIngestForm({ ...ingestForm, transaction_id: e.target.value })}
+                  placeholder="e.g. TX-CITI-998811"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Credit Amount (₹) *</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    value={ingestForm.amount}
+                    onChange={(e) => setIngestForm({ ...ingestForm, amount: e.target.value })}
+                    placeholder="50000.00"
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Bank Account</label>
+                  <input
+                    type="text"
+                    value={ingestForm.bank_account_number}
+                    onChange={(e) => setIngestForm({ ...ingestForm, bank_account_number: e.target.value })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Raw Narration *</label>
+                <textarea
+                  rows={2}
+                  required
+                  value={ingestForm.raw_narration}
+                  onChange={(e) => setIngestForm({ ...ingestForm, raw_narration: e.target.value })}
+                  placeholder="e.g. NEFT CR-HDFC001-ACME CORP-INV-2026-0001-SETTLEMENT"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono text-[11px]"
+                />
+                <span className="text-[10px] text-slate-400">Include invoice pattern (e.g. INV-2026-0001) for auto-match confidence.</span>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Sender Entity Name</label>
+                <input
+                  type="text"
+                  value={ingestForm.sender_name}
+                  onChange={(e) => setIngestForm({ ...ingestForm, sender_name: e.target.value })}
+                  placeholder="e.g. Acme Corporation Pvt Ltd"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+                <button type="button" onClick={() => setShowIngestModal(false)} className="px-3 py-1.5 border border-slate-300 rounded text-slate-700">Cancel</button>
+                <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white rounded font-medium hover:bg-blue-700">Ingest Transaction</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Match */}
+      {confirmMatchModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4 text-xs">
+            <div className="flex justify-between items-start border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Confirm Reconciliation Match</h3>
+                <p className="text-xs text-slate-500">Record a realized payment and allocate credit to target invoice.</p>
+              </div>
+              <button onClick={() => setConfirmMatchModal(null)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Bank Transaction ID:</span>
+                <span className="font-mono font-bold text-slate-900">{confirmMatchModal.item.transaction_id}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Amount:</span>
+                <span className="font-bold text-emerald-700">₹{parseFloat(confirmMatchModal.item.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Narration:</span>
+                <span className="font-mono text-[11px] text-slate-700 truncate max-w-xs">{confirmMatchModal.item.raw_narration}</span>
+              </div>
+            </div>
+
+            <form onSubmit={handleConfirmMatch} className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Target Invoice *</label>
+                <select
+                  required
+                  value={confirmMatchModal.invoice_id}
+                  onChange={(e) => {
+                    const invId = Number(e.target.value);
+                    const inv = invoicesList.find(i => i.id === invId);
+                    const alloc = inv ? Math.min(parseFloat(confirmMatchModal.item.amount), parseFloat(inv.remaining_balance)).toFixed(2) : confirmMatchModal.item.amount;
+                    setConfirmMatchModal({
+                      ...confirmMatchModal,
+                      invoice_id: invId,
+                      amount: alloc
+                    });
+                  }}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                >
+                  <option value={0}>-- Select Open Invoice --</option>
+                  {invoicesList.filter(i => i.status !== 'paid' && i.status !== 'cancelled').map(inv => {
+                    const b = customerBusinesses.find(cb => cb.id === inv.business_id);
+                    return (
+                      <option key={inv.id} value={inv.id}>
+                        {inv.invoice_number} • {b?.company_name || 'Customer'} • Bal: ₹{parseFloat(inv.remaining_balance).toLocaleString('en-IN')}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Allocated Amount (₹) *</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  required
+                  value={confirmMatchModal.amount}
+                  onChange={(e) => setConfirmMatchModal({ ...confirmMatchModal, amount: e.target.value })}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Audit Notes</label>
+                <input
+                  type="text"
+                  value={confirmMatchModal.notes}
+                  onChange={(e) => setConfirmMatchModal({ ...confirmMatchModal, notes: e.target.value })}
+                  placeholder="e.g. Bank credit slip verified against remittance advice"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+                <button type="button" onClick={() => setConfirmMatchModal(null)} className="px-3 py-1.5 border border-slate-300 rounded text-slate-700">Cancel</button>
+                <button type="submit" className="px-3 py-1.5 bg-emerald-600 text-white rounded font-medium hover:bg-emerald-700">Post Realized Payment</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Dispute Transaction */}
+      {disputeModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 text-xs">
+            <div className="flex justify-between items-start border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Flag Transaction for Dispute</h3>
+                <p className="text-xs text-slate-500">Record reason why bank feed item could not be assigned to an invoice.</p>
+              </div>
+              <button onClick={() => setDisputeModal(null)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            <form onSubmit={handleDispute} className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Dispute Reason *</label>
+                <textarea
+                  rows={3}
+                  required
+                  value={disputeModal.reason}
+                  onChange={(e) => setDisputeModal({ ...disputeModal, reason: e.target.value })}
+                  placeholder="e.g. Sender unknown; amount does not match any open quotation or invoice."
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+                <button type="button" onClick={() => setDisputeModal(null)} className="px-3 py-1.5 border border-slate-300 rounded text-slate-700">Cancel</button>
+                <button type="submit" className="px-3 py-1.5 bg-red-600 text-white rounded font-medium hover:bg-red-700">Confirm Dispute</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Run Reminder Sweep */}
+      {showSweepModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 text-xs">
+            <div className="flex justify-between items-start border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Execute Automated Reminder Sweep</h3>
+                <p className="text-xs text-slate-500">Evaluates active dunning rules (-3 days, 0 due date, 7 days overdue, 14 days overdue).</p>
+              </div>
+              <button onClick={() => setShowSweepModal(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Simulated Evaluation Date (Optional)</label>
+                <input
+                  type="date"
+                  value={sweepTargetDate}
+                  onChange={(e) => setSweepTargetDate(e.target.value)}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded font-mono"
+                />
+                <span className="text-[10px] text-slate-400 block mt-1">Leave empty to run against current system time.</span>
+              </div>
+
+              {sweepResult && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-emerald-800 space-y-1">
+                  <div className="font-bold flex items-center space-x-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Sweep Completed Successfully</span>
+                  </div>
+                  <div className="text-[11px] grid grid-cols-3 gap-2 pt-1 font-mono">
+                    <div>Evaluated: {sweepResult.processed_invoices}</div>
+                    <div>Sent: {sweepResult.reminders_sent}</div>
+                    <div>Skipped: {sweepResult.skipped_count}</div>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+                <button type="button" onClick={() => setShowSweepModal(false)} className="px-3 py-1.5 border border-slate-300 rounded text-slate-700">Close</button>
+                <button type="button" onClick={handleRunSweep} className="px-3 py-1.5 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 flex items-center space-x-1">
+                  <Play className="w-3 h-3" />
+                  <span>Execute Sweep</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create Reminder Rule */}
+      {showRuleModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4 text-xs">
+            <div className="flex justify-between items-start border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Configure Reminder Governance Rule</h3>
+                <p className="text-xs text-slate-500">Configure schedule offsets and notification templates for commercial dunning.</p>
+              </div>
+              <button onClick={() => setShowRuleModal(false)} className="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+            </div>
+
+            <form onSubmit={handleCreateReminderRule} className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Rule Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={ruleForm.name}
+                  onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
+                  placeholder="e.g. Courtesy Notice (5 Days Before Due)"
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Trigger Type *</label>
+                  <select
+                    value={ruleForm.trigger_type}
+                    onChange={(e) => setRuleForm({ ...ruleForm, trigger_type: e.target.value as any })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                  >
+                    <option value="before_due">Before Due Date</option>
+                    <option value="on_due">On Due Date</option>
+                    <option value="after_due_overdue">After Due Date (Overdue)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Days Offset *</label>
+                  <input
+                    type="number"
+                    required
+                    value={ruleForm.days_offset}
+                    onChange={(e) => setRuleForm({ ...ruleForm, days_offset: Number(e.target.value) })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                  />
+                  <span className="text-[10px] text-slate-400">e.g. -3 for 3 days before</span>
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Escalation *</label>
+                  <select
+                    value={ruleForm.escalation_level}
+                    onChange={(e) => setRuleForm({ ...ruleForm, escalation_level: e.target.value as any })}
+                    className="w-full px-3 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                  >
+                    <option value="standard">Standard</option>
+                    <option value="urgent">Urgent</option>
+                    <option value="final_notice">Final Notice</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Subject Template *</label>
+                <input
+                  type="text"
+                  required
+                  value={ruleForm.subject_template}
+                  onChange={(e) => setRuleForm({ ...ruleForm, subject_template: e.target.value })}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Body Template *</label>
+                <textarea
+                  rows={3}
+                  required
+                  value={ruleForm.body_template}
+                  onChange={(e) => setRuleForm({ ...ruleForm, body_template: e.target.value })}
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded"
+                />
+                <span className="text-[10px] text-slate-400">Variables: {'{invoice_number}'}, {'{business_name}'}, {'{amount_due}'}, {'{due_date}'}</span>
+              </div>
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
+                <button type="button" onClick={() => setShowRuleModal(false)} className="px-3 py-1.5 border border-slate-300 rounded text-slate-700">Cancel</button>
+                <button type="submit" className="px-3 py-1.5 bg-blue-600 text-white rounded font-medium hover:bg-blue-700">Save Rule</button>
               </div>
             </form>
           </div>

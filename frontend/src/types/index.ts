@@ -347,3 +347,69 @@ export interface RecurringBillingResult {
   errors: string[];
 }
 
+export interface BankFeedItem {
+  id: number;
+  transaction_id: string;
+  bank_account_number?: string;
+  transaction_date: string;
+  amount: string;
+  currency: string;
+  raw_narration: string;
+  parsed_reference?: string;
+  sender_name?: string;
+  status: 'unmatched' | 'suggested_match' | 'reconciled' | 'disputed' | 'ignored';
+  confidence_score: string;
+  suggested_invoice_id?: number;
+  suggested_business_id?: number;
+  matched_payment_id?: number;
+  reconciliation_notes?: string;
+  reconciled_at?: string;
+  created_at: string;
+}
+
+export interface BankFeedItemInput {
+  transaction_id: string;
+  transaction_date?: string;
+  amount: string;
+  currency?: string;
+  raw_narration: string;
+  bank_account_number?: string;
+  sender_name?: string;
+}
+
+export interface ReminderRule {
+  id: number;
+  name: string;
+  trigger_type: 'before_due' | 'on_due' | 'after_due_overdue' | 'upcoming_renewal';
+  days_offset: number;
+  channel: 'email' | 'in_app';
+  subject_template: string;
+  body_template: string;
+  escalation_level: 'standard' | 'urgent' | 'final_notice';
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface NotificationLog {
+  id: number;
+  business_id: number;
+  invoice_id?: number;
+  subscription_id?: number;
+  recipient_email: string;
+  channel: string;
+  subject: string;
+  content: string;
+  status: string;
+  failure_reason?: string;
+  sent_at: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface RunRemindersResult {
+  processed_invoices: number;
+  reminders_sent: number;
+  skipped_count: number;
+  errors: string[];
+}
+

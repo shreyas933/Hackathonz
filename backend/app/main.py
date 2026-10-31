@@ -3,7 +3,20 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api.routes import auth, admin_staff, customer_portal, catalog, audit, requests, quotations, subscriptions, billing
+from app.api.routes import (
+    auth,
+    admin_staff,
+    customer_portal,
+    catalog,
+    audit,
+    requests,
+    quotations,
+    subscriptions,
+    billing,
+    reconciliation,
+    webhooks,
+    reminders
+)
 from app.db.init_db import init_db
 
 @asynccontextmanager
@@ -37,6 +50,9 @@ app.include_router(requests.router, prefix=settings.API_V1_STR)
 app.include_router(quotations.router, prefix=settings.API_V1_STR)
 app.include_router(subscriptions.router, prefix=settings.API_V1_STR)
 app.include_router(billing.router, prefix=settings.API_V1_STR)
+app.include_router(reconciliation.router, prefix=settings.API_V1_STR)
+app.include_router(webhooks.router, prefix=settings.API_V1_STR)
+app.include_router(reminders.router, prefix=settings.API_V1_STR)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

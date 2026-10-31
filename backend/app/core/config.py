@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     APP_ENV: str = os.getenv("APP_ENV", "development")
     DEFAULT_CURRENCY: str = "INR"
     DEFAULT_CURRENCY_SYMBOL: str = "₹"
+    WEBHOOK_SECRET: str = os.getenv("WEBHOOK_SECRET", "brightloop_webhook_secret_key_2026")
 
     class Config:
         env_file = ".env"

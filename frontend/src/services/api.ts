@@ -3,7 +3,8 @@ import {
   Product, Plan, TaxRate, DiscountRule, AuditLog,
   SubscriptionRequest, RequestActivity, Quotation, QuotationVersion,
   VersionDiff, Subscription, Invoice, Payment,
-  GenerateInvoiceRequest, RecordPaymentRequest, RecurringBillingResult
+  GenerateInvoiceRequest, RecordPaymentRequest, RecurringBillingResult,
+  BankFeedItem, BankFeedItemInput, ReminderRule, NotificationLog, RunRemindersResult
 } from '../types';
 
 const API_BASE_URL = 'http://localhost:8000/api/v1';
@@ -456,5 +457,77 @@ export const api = {
     const query = versionNumber ? `?version_number=${versionNumber}` : '';
     const fn = quotationNumber ? `Quotation-${quotationNumber}.pdf` : `Quotation-${quotationId}.pdf`;
     return downloadFile(`/customer/quotations/${quotationId}/pdf${query}`, fn);
+  },
+
+  // --- Reconciliation & Bank Feeds ---
+  async ingestBankFeed(items: BankFeedItemInput[]): Promise<BankFeedItem[]> {
+    return request<BankFeedItem[]>('/finance/reconciliation/feed/ingest', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+  },
+
+  async listBankFeedItems(status?: string, businessId?: number): Promise<BankFeedItem[]> {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (businessId) params.append('business_id', businessId.toString());
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<BankFeedItem[]>(`/finance/reconciliation/feed${query}`);
+  },
+
+  async confirmFeedMatch(itemId: number, invoiceId: number, allocatedAmount?: string, notes?: string): Promise<BankFeedItem> {
+    return request<BankFeedItem>(`/finance/reconciliation/feed/${itemId}/match`, {
+      method: 'POST',
+      body: JSON.stringify({
+        invoice_id: invoiceId,
+        allocated_amount: allocatedAmount || undefined,
+        notes: notes || undefined,
+      }),
+    });
+  },
+
+  async disputeFeedItem(itemId: number, reason: string): Promise<BankFeedItem> {
+    return request<BankFeedItem>(`/finance/reconciliation/feed/${itemId}/dispute`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  // --- Reminders & Notifications ---
+  async listReminderRules(): Promise<ReminderRule[]> {
+    return request<ReminderRule[]>('/reminders/rules');
+  },
+
+  async createReminderRule(data: Partial<ReminderRule>): Promise<ReminderRule> {
+    return request<ReminderRule>('/reminders/rules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async runRemindersSweep(targetDate?: string): Promise<RunRemindersResult> {
+    return request<RunRemindersResult>('/reminders/run', {
+      method: 'POST',
+      body: JSON.stringify(targetDate ? { target_date: targetDate } : {}),
+    });
+  },
+
+  async listReminderHistory(businessId?: number, invoiceId?: number): Promise<NotificationLog[]> {
+    const params = new URLSearchParams();
+    if (businessId) params.append('business_id', businessId.toString());
+    if (invoiceId) params.append('invoice_id', invoiceId.toString());
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return request<NotificationLog[]>(`/reminders/history${query}`);
+  },
+
+  async listCustomerNotifications(unreadOnly?: boolean): Promise<NotificationLog[]> {
+    const query = unreadOnly ? '?unread_only=true' : '';
+    return request<NotificationLog[]>(`/customer/notifications${query}`);
+  },
+
+  async markCustomerNotificationRead(notificationId: number): Promise<NotificationLog> {
+    return request<NotificationLog>(`/customer/notifications/${notificationId}/read`, {
+      method: 'PATCH',
+    });
   },
 };

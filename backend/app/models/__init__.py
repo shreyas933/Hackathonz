@@ -19,6 +19,12 @@ from app.models.billing import (
     Payment,
     PaymentAllocation,
 )
+from app.models.automation import (
+    BankFeedItem,
+    WebhookEvent,
+    ReminderRule,
+    NotificationLog,
+)
 from app.models.audit import AuditLog
 
 __all__ = [
@@ -45,6 +51,10 @@ __all__ = [
     "InvoiceLine",
     "Payment",
     "PaymentAllocation",
+    "BankFeedItem",
+    "WebhookEvent",
+    "ReminderRule",
+    "NotificationLog",
     "AuditLog",
 ]
 

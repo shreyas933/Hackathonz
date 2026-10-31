@@ -4,6 +4,7 @@ from app.db.session import engine, Base, SessionLocal
 from app.models.user import User, StaffProfile
 from app.models.customer import CustomerBusiness, CustomerMembership
 from app.models.catalog import Product, ProductVariant, Plan, TaxRate, DiscountRule
+from app.models.automation import ReminderRule
 from app.core.security import get_password_hash
 from app.services.audit_service import AuditService
 
@@ -256,7 +257,50 @@ def init_db():
         )
         db.add_all([disc_vol, disc_ent])
 
-        # 8. Audit log for seed
+        # 8. Seed Default Reminder Governance Rules
+        rule_upcoming = ReminderRule(
+            name="Upcoming Invoice Reminder (3 Days Before Due)",
+            trigger_type="before_due",
+            days_offset=-3,
+            channel="email",
+            subject_template="Reminder: Brightloop Invoice {invoice_number} is due in 3 days",
+            body_template="Dear Customer, this is a reminder that invoice {invoice_number} for ₹{final_total} is due on {due_date}. Remaining balance: ₹{remaining_balance}.",
+            escalation_level="standard",
+            is_active=True
+        )
+        rule_due = ReminderRule(
+            name="Due Date Notice (On Due Date)",
+            trigger_type="on_due",
+            days_offset=0,
+            channel="email",
+            subject_template="Notice: Brightloop Invoice {invoice_number} is due today",
+            body_template="Dear Customer, invoice {invoice_number} for ₹{final_total} is due for payment today. Outstanding balance: ₹{remaining_balance}.",
+            escalation_level="standard",
+            is_active=True
+        )
+        rule_overdue_7 = ReminderRule(
+            name="First Overdue Notice (7 Days Overdue)",
+            trigger_type="after_due_overdue",
+            days_offset=7,
+            channel="email",
+            subject_template="Overdue Notice: Brightloop Invoice {invoice_number} is 7 days past due",
+            body_template="Dear Customer, invoice {invoice_number} has an outstanding balance of ₹{remaining_balance} and is 7 days overdue. Please remit payment promptly.",
+            escalation_level="urgent",
+            is_active=True
+        )
+        rule_overdue_14 = ReminderRule(
+            name="Final Notice (14 Days Overdue)",
+            trigger_type="after_due_overdue",
+            days_offset=14,
+            channel="email",
+            subject_template="Final Notice: Urgent payment required for Invoice {invoice_number}",
+            body_template="Dear Customer, this is a final notice regarding overdue invoice {invoice_number}. Immediate settlement of ₹{remaining_balance} is required to prevent disruption.",
+            escalation_level="final_notice",
+            is_active=True
+        )
+        db.add_all([rule_upcoming, rule_due, rule_overdue_7, rule_overdue_14])
+
+        # 9. Audit log for seed
         AuditService.log(
             db=db,
             action="seed_database",

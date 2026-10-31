@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   User, CustomerBusiness, CustomerMember, Product, Plan,
-  SubscriptionRequest, Quotation, Subscription, Invoice, Payment
+  SubscriptionRequest, Quotation, Subscription, Invoice, Payment,
+  NotificationLog
 } from '../../types';
 import { api } from '../../services/api';
 import {
   Building2, Users, Package, Plus, CheckCircle2, AlertCircle,
   FileCheck2, Check, X, MessageSquare, Send, Calendar, Clock,
-  Download, Receipt, CreditCard
+  Download, Receipt, CreditCard, Bell
 } from 'lucide-react';
 
 interface CustomerPortalProps {
@@ -16,7 +17,7 @@ interface CustomerPortalProps {
 
 export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
   const [activeTab, setActiveTab] = useState<
-    'subscriptions' | 'invoices' | 'payments' | 'quotations' | 'requests' | 'catalog' | 'team' | 'profile'
+    'subscriptions' | 'invoices' | 'payments' | 'quotations' | 'requests' | 'notifications' | 'catalog' | 'team' | 'profile'
   >('subscriptions');
 
   // Data states
@@ -28,6 +29,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [quotations, setQuotations] = useState<Quotation[]>([]);
   const [requestsList, setRequestsList] = useState<SubscriptionRequest[]>([]);
+  const [notifications, setNotifications] = useState<NotificationLog[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -60,7 +62,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [biz, prods, plns, subs, quotes, reqs, invs, pays] = await Promise.all([
+      const [biz, prods, plns, subs, quotes, reqs, invs, pays, notifs] = await Promise.all([
         api.getMyBusiness(),
         api.listProducts(true),
         api.listPlans(undefined, true),
@@ -69,6 +71,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
         api.listCustomerRequests(),
         api.listCustomerInvoices(),
         api.listCustomerPayments(),
+        api.listCustomerNotifications(),
       ]);
       setBusiness(biz);
       setProducts(prods);
@@ -78,6 +81,7 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
       setRequestsList(reqs);
       setInvoices(invs);
       setPayments(pays);
+      setNotifications(notifs);
 
       if (prods.length > 0 && plns.length > 0) {
         setRequestForm(prev => ({
@@ -173,6 +177,15 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
       await api.downloadCustomerQuotationPdf(quotationId, versionNumber, quotationNumber);
     } catch (err: any) {
       setFeedback({ type: 'error', message: `Failed to download PDF: ${err.message}` });
+    }
+  };
+
+  const handleMarkNotificationRead = async (id: number) => {
+    try {
+      await api.markCustomerNotificationRead(id);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message || 'Failed to update notification.' });
     }
   };
 
@@ -285,6 +298,21 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
             }`}
           >
             Commercial Requests ({requestsList.length})
+          </button>
+
+          <button
+            onClick={() => setActiveTab('notifications')}
+            className={`pb-3 text-xs font-medium border-b-2 whitespace-nowrap transition-colors flex items-center space-x-1.5 ${
+              activeTab === 'notifications' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Bell className="w-3.5 h-3.5" />
+            <span>Alerts & Reminders</span>
+            {notifications.filter(n => !n.is_read).length > 0 && (
+              <span className="bg-blue-600 text-white text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+                {notifications.filter(n => !n.is_read).length}
+              </span>
+            )}
           </button>
 
           <button
@@ -741,6 +769,81 @@ export const CustomerPortal: React.FC<CustomerPortalProps> = ({ user }) => {
                   {req.notes && <p className="text-xs text-slate-600 italic">"{req.notes}"</p>}
                 </div>
               ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Notifications & Alerts */}
+      {activeTab === 'notifications' && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Notifications & Alerts</h2>
+              <p className="text-xs text-slate-500">Payment reminders, renewal warnings, and automated account updates.</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Total Alerts Received</span>
+              <span className="text-xl font-bold text-slate-900">{notifications.length}</span>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+              <span className="text-xs text-slate-500 block">Unread Alerts</span>
+              <span className="text-xl font-bold text-blue-600">
+                {notifications.filter(n => !n.is_read).length}
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+            {notifications.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 text-xs">
+                No notifications or reminders for your organization.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {notifications.map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`p-4 transition-colors ${notif.is_read ? 'bg-white' : 'bg-blue-50/40'}`}
+                  >
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
+                            notif.channel === 'email'
+                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                          }`}>
+                            {notif.channel}
+                          </span>
+                          {!notif.is_read && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                              NEW
+                            </span>
+                          )}
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {new Date(notif.sent_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <h4 className="text-xs font-semibold text-slate-900">{notif.subject}</h4>
+                        <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">{notif.content}</p>
+                      </div>
+
+                      {!notif.is_read && (
+                        <button
+                          onClick={() => handleMarkNotificationRead(notif.id)}
+                          className="shrink-0 px-2.5 py-1 text-xs border border-blue-200 bg-white text-blue-600 rounded hover:bg-blue-50 font-medium"
+                        >
+                          Mark Read
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
