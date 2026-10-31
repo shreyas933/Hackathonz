@@ -198,6 +198,9 @@ class SubscriptionOut(BaseModel):
         from_attributes = True
 
 class SubscriptionStatusUpdate(BaseModel):
-    status: str = Field(..., pattern="^(confirmed|active|paused|closed)$")
+    status: Optional[str] = Field(None, pattern="^(confirmed|active|paused|closed|cancelled|expired)$")
+    reason: Optional[str] = None
+
+class SubscriptionActionRequest(BaseModel):
     reason: Optional[str] = None
 

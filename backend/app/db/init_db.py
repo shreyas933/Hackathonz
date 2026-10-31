@@ -7,6 +7,7 @@ from app.models.catalog import Product, ProductVariant, Plan, TaxRate, DiscountR
 from app.models.automation import ReminderRule
 from app.core.security import get_password_hash
 from app.services.audit_service import AuditService
+from app.db.seed_demo_data import seed_demo_data
 
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -15,6 +16,7 @@ def init_db():
         # Check if already seeded
         admin = db.query(User).filter(User.email == "admin@brightloop.com").first()
         if admin:
+            seed_demo_data(db)
             return
 
         print("Seeding initial foundation data...")
@@ -312,6 +314,7 @@ def init_db():
 
         db.commit()
         print("Initial foundation data seeded successfully.")
+        seed_demo_data(db)
     finally:
         db.close()
 

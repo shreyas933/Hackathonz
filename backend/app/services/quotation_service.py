@@ -202,6 +202,57 @@ class QuotationService:
         if data.decision_type == "admin_approved":
             version.status = "approved"
             quotation.status = "approved"
+
+            # Auto-provision active Subscription for customer upon Admin approval
+            existing_sub = db.query(Subscription).filter(
+                Subscription.accepted_quotation_id == quotation.id
+            ).first()
+
+            if not existing_sub:
+                sub_count = db.query(Subscription).count() + 1
+                year = datetime.now(timezone.utc).year
+                sub_number = f"SUB-{year}-{sub_count:04d}"
+
+                st_date = version.start_date or datetime.now(timezone.utc)
+                if st_date.tzinfo is None:
+                    st_date = st_date.replace(tzinfo=timezone.utc)
+                exp_date = st_date + timedelta(days=365)
+
+                subscription = Subscription(
+                    subscription_number=sub_number,
+                    business_id=quotation.business_id,
+                    accepted_quotation_id=quotation.id,
+                    accepted_quotation_version_id=version.id,
+                    status="confirmed",
+                    activation_policy="prepaid",
+                    start_date=st_date,
+                    expiry_date=exp_date,
+                    next_billing_date=st_date,
+                    billing_frequency="monthly",
+                    payment_terms=version.payment_terms or "net_30",
+                    total_recurring_amount=version.final_total
+                )
+                db.add(subscription)
+                db.flush()
+
+                for line in version.lines:
+                    sub_line = SubscriptionLine(
+                        subscription_id=subscription.id,
+                        product_id=line.product_id,
+                        variant_id=line.variant_id,
+                        plan_id=line.plan_id,
+                        quantity=line.quantity,
+                        unit_price=line.unit_price,
+                        tax_rate_percent=line.tax_rate_percent,
+                        line_total=line.line_total
+                    )
+                    db.add(sub_line)
+
+                # Link and update customer request if tied
+                if quotation.request_id:
+                    req = db.query(SubscriptionRequest).filter(SubscriptionRequest.id == quotation.request_id).first()
+                    if req:
+                        req.status = "approved_accepted"
         elif data.decision_type == "admin_rejected":
             version.status = "rejected_by_admin"
             quotation.status = "rejected_by_admin"

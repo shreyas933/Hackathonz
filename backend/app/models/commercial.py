@@ -78,6 +78,13 @@ class Quotation(Base):
     created_by = relationship("User", foreign_keys=[created_by_user_id])
     versions = relationship("QuotationVersion", back_populates="quotation", cascade="all, delete-orphan", order_by="QuotationVersion.version_number.desc()")
 
+    @property
+    def current_version(self):
+        for v in self.versions:
+            if v.version_number == self.current_version_number:
+                return v
+        return self.versions[0] if self.versions else None
+
 
 class QuotationVersion(Base):
     __tablename__ = "quotation_versions"
