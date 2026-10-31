@@ -8,7 +8,7 @@ from app.schemas.customer import (
     AddCustomerMemberRequest,
 )
 from app.services.customer_service import CustomerService
-from app.api.deps import get_current_customer, get_current_admin
+from app.api.deps import get_current_customer, get_current_admin, get_current_staff
 from app.models.user import User
 from typing import List
 
@@ -55,10 +55,10 @@ def add_team_member(
     ip = request.client.host if request.client else None
     return CustomerService.add_business_member(db, business_id, current_user, data, ip_address=ip)
 
-# Admin endpoint to list all customer businesses
+# Staff & Admin endpoint to list all customer businesses
 @router.get("/admin/businesses", response_model=List[CustomerBusinessOut])
-def list_all_businesses_for_admin(
-    admin_user: User = Depends(get_current_admin),
+def list_all_businesses_for_staff(
+    staff_user: User = Depends(get_current_staff),
     db: Session = Depends(get_db)
 ):
     businesses = CustomerService.list_businesses_for_admin(db)
